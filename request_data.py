@@ -1,17 +1,8 @@
-'''
-Recives requests to be made (country, league_name, first year of request)
-Loops requests from that first year untill current + future
-Determines links for each request and delegates to LeagueSeasonPages
-'''
 import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta, datetime
 
 import pandas as pd
-from selenium.webdriver.support.ui import Select
-
-from Data.FetchNewData.OddsPortal.league_season import ManageSeasonPages
-
 DATA_DIR = 'Data/NewData'
 
 
@@ -50,11 +41,16 @@ class ManageRequests:
                 # Need to restore the driver to the country url (to find the leagues table)
                 self.DRIVER.get(f"https://www.oddsportal.com/soccer/{country}")
                 self.remove_add()
-                # Get the top N leagues from this country 
-                ul_element = self.DRIVER.find_element(
-                    By.XPATH, "/html/body/div[1]/div/div[1]/div/main/div[2]/div[4]/div[2]/ul")
-                li_elements = ul_element.find_elements(By.TAG_NAME, "li")
-                if li_elements[i]:
+                try:
+                    # Get the top N leagues from this country 
+                    ul_element = self.DRIVER.find_element(
+                        By.XPATH, "/html/body/div[1]/div/div[1]/div/main/div[2]/div[4]/div[2]/ul")
+                    li_elements = ul_element.find_elements(By.TAG_NAME, "li")
+                except:
+                    # temporary not avaliable
+                    print('temporary not avaliable')
+                    break
+                if len(li_elements) >= i:
                     li_elements[i].find_element(By.TAG_NAME, "a").click()
                     self.league(last_n_years)
 
@@ -167,8 +163,9 @@ class ManageRequests:
             
         # fetch games 
         games = []
+        # when a date stores games not from normal league (ex play offs)
         print('hi')
-        wait = WebDriverWait(self.DRIVER, 5)
+        wait = WebDriverWait(self.DRIVER, 8)
         try:
             elements = wait.until(EC.presence_of_all_elements_located(
                 (By.CSS_SELECTOR, "div.flex.flex-col.w-full.text-xs.eventRow")))
@@ -176,23 +173,25 @@ class ManageRequests:
             # no games 
             return games 
         else:
+            except_date = False 
             for element in elements:
                 # Only Count the direct Children Div
                 # 2 Divs --> date, game info , last div = game
                 # 1 Div --> game info (same date as row above)
                 div_elements = element.find_elements(By.XPATH, "./div[contains(@class, 'border-black-borders')]")
-                
-                #div_elements = element.find_elements(By.CSS_SELECTOR, "> div.border-black-borders")
-                size = len(div_elements)
-                if size > 1:  
+                if len(div_elements) > 1:  
                     game_date = div_elements[0].text.split('\n')[0]
-                    game_date = self.handle_date_format(date)
+                    game_date = self.handle_date_format(game_date)
+                    except_date = game_date is None
+                if except_date:
+                    # jump all games from this date
+                    continue
                 row = div_elements[-1].text.split('\n')
                 if len(row) == 8:
                     # dosent have a result --> future game, or game never happened
                     _, team1, _, _, v1, x, v2, _ = row
                     result = None 
-                    if game_date < date.today():
+                    if datetime.strptime(game_date, '%Y-%m-%d').date() < date.today():
                         # Cancelled or Interruped 
                         continue
                 elif len(row) == 10:
@@ -200,24 +199,50 @@ class ManageRequests:
                         _, v1, x, v2, _ = row 
                     result = self.declare_winner(team1_result, team2_result)
                 else:
+                    # Cancelled or Interruped 
                     print('ERROR', row)
+                    continue
                 print(game_date, team1, result, v1, x, v2)
                 games.append([game_date, team1, result, v1, x, v2])
         return games
 
     @staticmethod
     def handle_date_format(game_date: str):
-        ''' String format to -> year-month-day'''
-        substring = game_date.split(" ")[0]
-        if 'Yesterday' in substring:
+        ''' Fix date. Odds portal uses abbvs and some 
+        variations of date that mus be defined
+        '''
+        game_date = game_date.split(" ")    
+        if 'Yesterday' in game_date[0]:
             yesterday = date.today() - timedelta(days=1)
             return yesterday.strftime('%Y-%m-%d')
-        if 'Today' in substring:
+        if 'Today' in game_date[0]:
             return date.today().strftime('%Y-%m-%d')
-        if 'Tomorrow' in substring:
+        if 'Tomorrow' in game_date[0]:
             tomorrow = date.today() + timedelta(days=1)
             return tomorrow.strftime('%Y-%m-%d')
-        return datetime.strptime(game_date, '%d %B %Y').strftime('%Y--%m-%d')
+        
+        month_dict = {
+            'Jan': 'January',
+            'Feb': 'February',
+            'Mar': 'March',
+            'Apr': 'April',
+            'May': 'May',
+            'Jun': 'June',
+            'Jul': 'July',
+            'Aug': 'August',
+            'Sep': 'September',
+            'Oct': 'October',
+            'Nov': 'November',
+            'Dec': 'December'
+        }
+        game_date[1] = month_dict[game_date[1]]
+        game_date = ' '.join(game_date)
+        try:
+            return datetime.strptime(game_date, '%d %B %Y').strftime('%Y-%m-%d')
+        except ValueError:
+            # not normal league game
+            # ex: Play offs
+            return None
 
     @staticmethod
     def declare_winner(v1: str, v2) -> int:
