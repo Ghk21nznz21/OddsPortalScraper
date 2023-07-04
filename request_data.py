@@ -1,13 +1,11 @@
 import time
 from dataclasses import dataclass, field
-from datetime import date, timedelta, datetime
+from datetime import date, datetime, timedelta
 
 import pandas as pd
-DATA_DIR = 'Data/NewData'
-
 
 from selenium import webdriver
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -22,10 +20,13 @@ class ManageRequests:
             country --> name of the country to fetch data
             max_leagues --> fetch data from the top N leagues of that country
             last_n_years --> last N seasons/years of that to fetch 
+            
+    @param path: were to send the games saved 
         
     For each League will get data from every page of every season requested
     '''
     requests: list[str, str, int]
+    path: str
     games: list = field(init=False)
 
     def __post_init__(self):
@@ -40,23 +41,23 @@ class ManageRequests:
             for i in range(max_leagues):
                 # Need to restore the driver to the country url (to find the leagues table)
                 self.DRIVER.get(f"https://www.oddsportal.com/soccer/{country}")
-                self.remove_add()
+                self._remove_add()
                 try:
                     # Get the top N leagues from this country 
                     ul_element = self.DRIVER.find_element(
                         By.XPATH, "/html/body/div[1]/div/div[1]/div/main/div[2]/div[4]/div[2]/ul")
                     li_elements = ul_element.find_elements(By.TAG_NAME, "li")
-                except:
-                    # temporary not avaliable
+                    li_elements[i].find_element(By.TAG_NAME, "a").click()
+                except NoSuchElementException: # 
                     print('temporary not avaliable')
                     break
-                if len(li_elements) >= i:
-                    li_elements[i].find_element(By.TAG_NAME, "a").click()
-                    self.league(last_n_years)
+                except IndexError: 
+                    print('not enought leagues')
+                else:
+                    self._league(last_n_years)
 
-    def league(self, last_n_years: int):
+    def _league(self, last_n_years: int):
         ''' Gets all games from this league (*seasons, *pages) '''        
-        self.remove_add()
         # Fetch all future matches 
         self.games.extend(self._get_games())
         self.DRIVER.execute_script("window.scrollTo(0, 0)")
@@ -94,15 +95,15 @@ class ManageRequests:
                 continue
             else:
                 # loop season pages 
-                self.all_season_pages()  
+                self._all_season_pages()  
         # CHECKPOINT 
         df = pd.DataFrame(self.games, columns=[
                 'Date', 'Team1_Name', 'Result',
                 'Odd_V1', 'Odd_X', 'Odd_V2'])
-        df.to_csv(f'{DATA_DIR}/OddsPortal.csv', index=False, mode='a')
+        df.to_csv(self.path, index=False, mode='a')
         
             
-    def all_season_pages(self):
+    def _all_season_pages(self):
         ''' Get all matches from every page of this season '''
         try: 
             WebDriverWait(self.DRIVER, 10).until(EC.presence_of_element_located(
@@ -113,13 +114,13 @@ class ManageRequests:
             return None  
         time.sleep(1)  
         self.games.extend(self._get_games())
-        not_end_page = self.next_button()
+        not_end_page = self._next_button()
         while not_end_page:
             self.games.extend(self._get_games())
-            not_end_page = self.next_button()
+            not_end_page = self._next_button()
         return None 
 
-    def remove_add(self):
+    def _remove_add(self):
         '''Remove ad that apears when whe enter oddsportal website '''
         try:
             add_button = WebDriverWait(self.DRIVER, 10).until(
@@ -131,7 +132,7 @@ class ManageRequests:
             # If the ad button is not found, no add is visible 
             pass
 
-    def next_button(self):
+    def _next_button(self):
         ''' Runs for every page after get_games --> already at page bottom '''
         Xpath = "/html/body/div[1]/div/div[1]/div/main/div[2]/div[5]/div[4]/div/div[3]/a[1]"
         return_value = True
